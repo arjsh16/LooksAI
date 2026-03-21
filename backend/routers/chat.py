@@ -4,14 +4,13 @@ import json
 import logging
 
 from core.database import AsyncSessionLocal
-from models.analysis import AnalysisSession, ChatMessage
+from models.analysis import AnalysisSession, AnalysisStatus, ChatMessage, MessageRole
 from services.recommendation.engine import get_haircut_recommendations
 from services.llm.mistral_client import stream_recommendation_narrative
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Conversation state machine stages
 STAGE_GREET = "greet"
 STAGE_ASK_MAINTENANCE = "ask_maintenance"
 STAGE_ASK_LENGTH = "ask_length"
@@ -27,21 +26,13 @@ async def send_json(ws: WebSocket, data: dict):
 async def chat_stream(
     websocket: WebSocket,
     session_id: int,
-    token: str = Query(...),  # JWT passed as query param for WS auth
+    token: str = Query(...),
 ):
-    """
-    WebSocket endpoint that drives the multi-turn conversation:
-    1. Greet + summarise analysis
-    2. Ask maintenance preference
-    3. Ask length preference
-    4. Stream LLM recommendation
-    """
     from jose import jwt, JWTError
     from core.config import settings
 
     await websocket.accept()
 
-    # Authenticate via token query param
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
         user_id = int(payload.get("sub"))
@@ -64,20 +55,28 @@ async def chat_stream(
         await websocket.close(code=1008)
         return
 
-    if session.status != "complete":
-        await send_json(websocket, {"type": "error", "message": "Analysis not complete yet"})
+    if session.status != AnalysisStatus.COMPLETED:
+        await send_json(websocket, {
+            "type": "error",
+            "message": f"Analysis not complete yet. Status: {session.status}",
+        })
         await websocket.close()
         return
+
+    skin = session.skin_analysis or {}
+    skin_type = skin.get("skin_type", "combination")
 
     stage = STAGE_GREET
     maintenance = None
     length = None
 
     try:
-        # Stage 1: Greet with analysis summary
-        greeting = _build_greeting(session)
-        await send_json(websocket, {"type": "message", "role": "assistant", "content": greeting, "stage": stage})
-        await _save_message(session_id, "assistant", greeting, "analysis_summary")
+        greeting = _build_greeting(session, skin)
+        await send_json(websocket, {
+            "type": "message", "role": "assistant",
+            "content": greeting, "stage": stage,
+        })
+        await _save_message(session_id, MessageRole.ASSISTANT, greeting, {"stage": "analysis_summary"})
 
         stage = STAGE_ASK_MAINTENANCE
         maint_prompt = "Would you prefer a **high maintenance** or **low maintenance** haircut?"
@@ -91,16 +90,17 @@ async def chat_stream(
             data = json.loads(raw)
             user_msg = data.get("message", "").strip().lower()
 
-            await _save_message(session_id, "user", user_msg, "text")
+            await _save_message(session_id, MessageRole.USER, user_msg, {"stage": stage})
 
             if stage == STAGE_ASK_MAINTENANCE:
                 if user_msg in ("high", "low"):
                     maintenance = user_msg
                     stage = STAGE_ASK_LENGTH
-                    length_prompt = "Great! And what length are you going for — **short**, **medium**, or **long**?"
+                    length_prompt = "Great! And what length — **short**, **medium**, or **long**?"
                     await send_json(websocket, {
-                        "type": "message", "role": "assistant", "content": length_prompt,
-                        "stage": stage, "options": ["short", "medium", "long"],
+                        "type": "message", "role": "assistant",
+                        "content": length_prompt, "stage": stage,
+                        "options": ["short", "medium", "long"],
                     })
                 else:
                     await send_json(websocket, {
@@ -114,19 +114,16 @@ async def chat_stream(
                     length = user_msg
                     stage = STAGE_GENERATING
 
-                    # Filter haircuts and stream narrative
                     haircuts = get_haircut_recommendations(
                         face_shape=session.face_shape,
                         facial_features=session.facial_features,
-                        skin_type=session.skin_type,
+                        skin_type=skin_type,
                         maintenance=maintenance,
                         length=length,
                     )
                     analysis_context = {
                         "face_shape": session.face_shape,
-                        "skin_type": session.skin_type,
-                        "acne_severity": session.acne_severity,
-                        "dark_circles": session.dark_circles,
+                        "skin_analysis": session.skin_analysis,
                         "facial_features": session.facial_features,
                         "maintenance_preference": maintenance,
                         "length_preference": length,
@@ -140,8 +137,10 @@ async def chat_stream(
                         await send_json(websocket, {"type": "stream_chunk", "content": chunk})
 
                     await send_json(websocket, {"type": "stream_end", "stage": STAGE_DONE})
-                    await _save_message(session_id, "assistant", full_response, "recommendation")
-                    stage = STAGE_DONE
+                    await _save_message(
+                        session_id, MessageRole.ASSISTANT, full_response,
+                        {"stage": "recommendation", "maintenance": maintenance, "length": length},
+                    )
                     break
                 else:
                     await send_json(websocket, {
@@ -154,34 +153,39 @@ async def chat_stream(
         logger.info(f"WebSocket disconnected for session {session_id}")
     except Exception as e:
         logger.exception(f"WebSocket error for session {session_id}: {e}")
-        await send_json(websocket, {"type": "error", "message": "An internal error occurred"})
-        await websocket.close()
+        try:
+            await send_json(websocket, {"type": "error", "message": "An internal error occurred"})
+            await websocket.close()
+        except Exception:
+            pass
 
 
-def _build_greeting(session: AnalysisSession) -> str:
+def _build_greeting(session: AnalysisSession, skin: dict) -> str:
     feats = session.facial_features or {}
     lines = [
-        f"Analysis complete! Here's what I found:",
+        "Analysis complete! Here's what I found:",
         f"- **Face shape**: {session.face_shape or 'unknown'}",
-        f"- **Skin type**: {session.skin_type or 'unknown'}",
-        f"- **Acne severity**: {session.acne_severity or 'none'}",
-        f"- **Dark circles**: {session.dark_circles or 'none'}",
-    ] 
+        f"- **Skin type**: {skin.get('skin_type', 'unknown')}",
+        f"- **Acne severity**: {skin.get('acne_severity', 'none')}",
+        f"- **Dark circles**: {skin.get('dark_circles', 'none')}",
+    ]
     if feats:
-        lines.append(f"- **Jawline**: {feats.get('jawline', 'n/a')}, "
-                     f"**Forehead**: {feats.get('forehead', 'n/a')}, "
-                     f"**Cheekbones**: {feats.get('cheekbones', 'n/a')}")
+        lines.append(
+            f"- **Jawline**: {feats.get('jawline', 'n/a')}, "
+            f"**Forehead**: {feats.get('forehead', 'n/a')}, "
+            f"**Cheekbones**: {feats.get('cheekbones', 'n/a')}"
+        )
     lines.append("\nLet's find the perfect haircut for you! I have a couple of quick questions.")
     return "\n".join(lines)
 
 
-async def _save_message(session_id: int, role: str, content: str, message_type: str):
+async def _save_message(session_id: int, role: MessageRole, content: str, meta: dict):
     async with AsyncSessionLocal() as db:
         msg = ChatMessage(
             session_id=session_id,
             role=role,
             content=content,
-            message_type=message_type,
+            meta=meta,
         )
         db.add(msg)
         await db.commit()

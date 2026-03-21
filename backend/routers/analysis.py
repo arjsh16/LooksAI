@@ -24,7 +24,7 @@ from models.analysis import AnalysisSession, AnalysisStatus
 from models.user import User
 from services.face_analysis.pipeline import run_analysis_pipeline
 
-router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+router = APIRouter(tags=["analysis"])
 
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 

@@ -13,7 +13,7 @@ from core.security import (
 )
 from models.user import User
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(tags=["auth"])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────

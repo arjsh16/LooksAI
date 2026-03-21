@@ -158,3 +158,22 @@ Skin: {skin.get("skin_type")}, Acne: {skin.get("acne_severity")}, Dark circles: 
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
     ]
+
+# ── Convenience wrapper used by chat router ───────────────────────────────────
+
+async def stream_recommendation_narrative(
+    filtered_haircuts: list[dict],
+    analysis_context: dict,
+) -> "AsyncIterator[str]":
+    """
+    Wrapper that builds the prompt and streams the LLM response.
+    Called from the WebSocket chat handler.
+    """
+    messages = build_recommendation_prompt(
+        analysis=analysis_context,
+        filtered_haircuts=filtered_haircuts,
+        maintenance=analysis_context.get("maintenance_preference", "low"),
+        length=analysis_context.get("length_preference", "medium"),
+    )
+    async for chunk in stream_completion(messages):
+        yield chunk

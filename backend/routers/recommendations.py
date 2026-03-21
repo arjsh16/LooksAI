@@ -9,7 +9,7 @@ from core.security import get_current_user
 from models.analysis import AnalysisSession, AnalysisStatus, Recommendation
 from models.user import User
 
-router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
+router = APIRouter(tags=["recommendations"])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
