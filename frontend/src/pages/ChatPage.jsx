@@ -67,6 +67,9 @@ export default function ChatPage() {
           onChoice={handleChoice}
         />
       </main>
+      <div className="page-footer">
+      <p>This is an AI and can be inaccurate, so please verify important information with a dermatologist.</p>
+      </div>
     </div>
   )
 }

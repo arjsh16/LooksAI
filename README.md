@@ -1,4 +1,4 @@
-# LooksAI 
+# LooksAI ✂️
 
 > Upload 3 face photos. Get your ideal haircut, a barber-ready brief, and targeted skincare tips — powered by MediaPipe, EfficientNet, and Mistral.
 

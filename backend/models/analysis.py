@@ -36,7 +36,8 @@ class AnalysisSession(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     status: Mapped[AnalysisStatus] = mapped_column(
-        SAEnum(AnalysisStatus), default=AnalysisStatus.PENDING
+        SAEnum(AnalysisStatus, name="analysis_status", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        default=AnalysisStatus.PENDING
     )
 
     # Uploaded image paths
@@ -106,7 +107,10 @@ class ChatMessage(Base):
     session_id: Mapped[int] = mapped_column(
         ForeignKey("analysis_sessions.id"), nullable=False, index=True
     )
-    role: Mapped[MessageRole] = mapped_column(SAEnum(MessageRole), nullable=False)
+    role: Mapped[MessageRole] = mapped_column(
+        SAEnum(MessageRole, name="message_role", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     meta: Mapped[Optional[dict]] = mapped_column(JSON)  # e.g. {"stage": "ask_maintenance"}
 
